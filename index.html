@@ -33,7 +33,7 @@
 <body>
 <div id="ui">
   <h1>Shadow Theatre</h1>
-  <p>Out front, watch the shadow and flip its direction in your mind: imagine looking down on it, then up. Then go backstage to see which way it's really turning. Pick a <b>shape</b> below. <b>Lamp</b> moves the light up or down, <b>Turn</b> spins it by hand, <b>Tilt</b> tips its axis. Backstage, <b>Orbit</b> and <b>Height</b> move you around it.</p>
+  <p>Out front, watch the shadow and flip its direction in your mind: imagine looking down on it, then up. Then go backstage to see which way it's really turning. Pick a <b>shape</b> below. <b>Lamp</b> moves the light up or down, <b>Turn</b> spins it by hand, <b>Tilt</b> tips its axis. Backstage, <b>Orbit</b> and <b>Height</b> move you around it, and the glowing hotspots let you jump inside the object and back out.</p>
   <div class="row">
     <button data-act="front">Front of house</button>
     <button data-act="back">Backstage</button>
@@ -455,6 +455,52 @@ function btnAtUV(uv) {
 }
 const sliderById = id => SLIDERS.find(sl => 's_' + sl.id === id);
 
+// ---------- Backstage hotspots: jump inside the object, and back out to the watch point ----------
+const WATCH = { x: Math.sin(PHI0) * ORBIT_R, z: FIG_Z + Math.cos(PHI0) * ORBIT_R };
+let inside = false;
+function makeHotspot(id, text, x, y, z) {
+  const g = new THREE.Group(); g.position.set(x, y, z);
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd98f }));
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.25, depthWrite: false }));
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));   // easy-to-aim target
+  hit.userData.hs = id;
+  const tag = label(text, 0.9, 0.18, 90, '#ffd98f'); tag.position.y = 0.24;
+  g.add(orb, glow, hit, tag); g.userData = { glow, tag, hit }; g.visible = false;
+  scene.add(g); return g;
+}
+const hsIn = makeHotspot('hs_in', 'Jump inside', 0, SCY, FIG_Z);
+const hsOut = makeHotspot('hs_out', 'Step back out', WATCH.x, 1.45, WATCH.z);
+const outRing = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.3, 40), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.45 }));
+outRing.rotation.x = -Math.PI / 2; outRing.position.set(WATCH.x, 0.006, WATCH.z); scene.add(outRing);
+function updateHotspots(t) {
+  const h = headPos();
+  hsIn.visible = where === 'back' && !inside;
+  hsOut.visible = outRing.visible = where === 'back' && Math.hypot(h.x - WATCH.x, h.z - WATCH.z) > 0.7;
+  for (const g of [hsIn, hsOut]) {
+    if (!g.visible) continue;
+    const hov = hovered.has(g.userData.hit.userData.hs);
+    g.userData.glow.scale.setScalar((hov ? 1.5 : 1) * (1 + 0.15 * Math.sin(t * 4)));
+    g.userData.tag.lookAt(h);
+  }
+}
+function pickables() {
+  return [...panels.filter(p => p.visible), ...[hsIn, hsOut].filter(g => g.visible).map(g => g.userData.hit)];
+}
+function idFromHit(hit) { return hit.object.userData.hs || btnAtUV(hit.uv); }
+function jumpInside() {
+  if (where !== 'back') teleport('back', true);
+  autoOrbit = false; inside = true;
+  if (renderer.xr.isPresenting) {
+    const h = headPos();
+    dolly.position.x += 0 - h.x; dolly.position.z += FIG_Z - h.z;
+    dolly.position.y = SCY - camera.position.y;        // your eyes at the object's centre
+  } else {
+    dolly.position.set(0, SCY - 1.6, FIG_Z); pitch = 0; camera.rotation.x = 0;
+  }
+  refreshUI();
+}
+function stepOut() { autoOrbit = false; orbitDeg = 0; heightOff = 0; teleport('back'); }
+
 // ---------- Movement ----------
 const tmpV = new THREE.Vector3(), tmpD = new THREE.Vector3();
 function headPos() { camera.getWorldPosition(tmpV); return tmpV.clone(); }
@@ -475,6 +521,7 @@ function rotateAroundHead(a) {
 let pitch = 0;
 // Orbit = swing you (and the panel) around the object's spin axis; never fights your own head turning
 function setOrbit(v) {
+  if (inside) { inside = false; orbitDeg = v; return teleport('back', true); }
   if (where !== 'back') { orbitDeg = v; return teleport('back', true); }
   const d = (v - orbitDeg) * Math.PI / 180; orbitDeg = v;
   const c = new THREE.Vector3(0, dolly.position.y, FIG_Z);
@@ -482,6 +529,7 @@ function setOrbit(v) {
 }
 function setHeight(v) {
   heightOff = v;
+  if (inside) return teleport('back', true);
   if (where !== 'back') return teleport('back', true);
   dolly.position.y = v;
   if (!renderer.xr.isPresenting) { pitch = Math.atan2(SCY - (1.6 + v), ORBIT_R); camera.rotation.x = pitch; }
@@ -497,6 +545,7 @@ function placeBackPanel() {
 }
 function teleport(name, quiet = false, placePanel = false) {
   const entering = name === 'back' && where !== 'back';
+  inside = false;
   where = name;
   const s = name === 'back' ? orbitSpot() : SPAWN[name], y = name === 'back' ? heightOff : 0;
   if (renderer.xr.isPresenting) {
@@ -519,6 +568,8 @@ function act(id) {
   if (id === 'reveal') reveal = !reveal;
   if (id === 'reverse') spinDir *= -1;
   if (id === 'speed') speedIdx = (speedIdx + 1) % SPEEDS.length;
+  if (id === 'hs_in') return jumpInside();
+  if (id === 'hs_out') return stepOut();
   if (id === 'pause') paused = !paused;
   if (id === 'exitvr') { const ses = renderer.xr.getSession(); if (ses) ses.end(); return; }
   if (id === 'auto') { autoOrbit = !autoOrbit; if (autoOrbit && where !== 'back') teleport('back', true); }
@@ -568,8 +619,8 @@ function rayHit(c) {
   rotM.identity().extractRotation(c.matrixWorld);
   raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
   raycaster.ray.direction.set(0, 0, -1).applyMatrix4(rotM);
-  const hit = raycaster.intersectObjects(panels.filter(p => p.visible), false)[0];
-  return hit ? { dist: hit.distance, id: btnAtUV(hit.uv), x: hit.uv.x * CW } : null;
+  const hit = raycaster.intersectObjects(pickables(), false)[0];
+  return hit ? { dist: hit.distance, id: idFromHit(hit), x: hit.uv ? hit.uv.x * CW : 0, hs: !!hit.object.userData.hs } : null;
 }
 function updateRays() {
   const now = new Set();
@@ -579,7 +630,7 @@ function updateRays() {
     const hit = rayHit(c);
     c.userData.line.scale.z = hit ? hit.dist : 4;
     if (hit && hit.id) now.add(hit.id);
-    if (c.userData.drag && hit) setSliderFromX(c.userData.drag, hit.x);   // keep dragging while trigger held
+    if (c.userData.drag && hit && !hit.hs) setSliderFromX(c.userData.drag, hit.x);   // keep dragging while trigger held
   }
   if (now.size !== hovered.size || [...now].some(id => !hovered.has(id))) { hovered = now; drawPanel(); }
 }
@@ -636,8 +687,8 @@ el.addEventListener('pointerup', e => {
   if (drag && drag.slider) { draggingIds.delete(drag.slider.id); drag = null; drawPanel(); return; }
   if (drag && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) {
     raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
-    const hit = raycaster.intersectObjects(panels.filter(p => p.visible), false)[0];
-    if (hit) { const id = btnAtUV(hit.uv); if (id) act(id); }
+    const hit = raycaster.intersectObjects(pickables(), false)[0];
+    if (hit) { const id = idFromHit(hit); if (id) act(id); }
   }
   drag = null;
 });
@@ -664,7 +715,7 @@ renderer.setAnimationLoop(() => {
   if (!paused) spinner.rotation.y += spinDir * SPEEDS[speedIdx] * dt;
   if (autoOrbit) setOrbit((orbitDeg + 8 * dt) % 360);   // slow walk around the object
   if ((!paused || autoOrbit) && clock.elapsedTime - lastTurnDraw > 0.25) { lastTurnDraw = clock.elapsedTime; drawPanel(); syncHtmlSliders(); }  // keep moving sliders live
-  xrInput(dt); desktopMove(dt); updateRays();
+  xrInput(dt); desktopMove(dt); updateRays(); updateHotspots(clock.elapsedTime);
 
   revealAmt += ((reveal ? 1 : 0) - revealAmt) * Math.min(1, dt * 4);
   screenFront.material.opacity = 1 - 0.9 * revealAmt;
