@@ -290,7 +290,6 @@ const prism = wireframe(new THREE.CylinderGeometry(0.55, 0.55, 1.15, 6));
 const icosa = wireframe(new THREE.IcosahedronGeometry(0.72));
 
 const OBJECTS = [
-  { name: 'Dancer',       group: dancer,   lamp: 0 },
   { name: 'Dot cylinder', group: cylinder, lamp: 14 },
   { name: 'Wire cube',    group: cube,     lamp: 14 },
   { name: 'Dot sphere',   group: sphere,   lamp: 0 },
@@ -325,10 +324,10 @@ function applyLamp() {
 function applyObject() {
   OBJECTS.forEach((o, i) => { o.group.visible = i === objIdx; });
   // floating objects: no pedestal in the shadow either, so nothing opaque sits in front of the dots
-  if (objIdx === 0) pedestal.layers.enable(1); else pedestal.layers.disable(1);
+  pedestal.layers.disable(1);
   lampDeg = OBJECTS[objIdx].lamp; applyLamp();
 }
-applyLamp();
+applyObject();
 const rt = new THREE.WebGLRenderTarget(1024, Math.round(1024 * SH / SW), { samples: 4 });
 const shadowMat = new THREE.MeshBasicMaterial({ color: 0x120e0c });
 
@@ -373,7 +372,7 @@ function setSliderFromX(sl, x) {
 let draggingIds = new Set();
 function btnLabel(id) {
   if (id.startsWith('obj')) return OBJECTS[+id.slice(3)].name;
-  return { front: 'Front of house', back: 'Backstage', reveal: reveal ? 'Hide the figure' : 'Reveal the figure',
+  return { front: 'Front of house', back: 'Backstage', reveal: reveal ? 'Hide the object' : 'Reveal the object',
            reverse: 'Reverse spin', speed: 'Speed: ' + SPEED_NAMES[speedIdx], pause: paused ? 'Play' : 'Pause',
            }[id];
 }
