@@ -14,6 +14,11 @@
   #ui button { flex: 1 1 45%; font: 13px Georgia, serif; color: #f3e6cf; background: #2b2531; border: 1px solid #4a4052; border-radius: 8px; padding: 8px 6px; cursor: pointer; }
   #ui button:hover { background: #3a3242; }
   #ui .shapes button { flex: 1 1 30%; font-size: 12px; padding: 6px 4px; }
+  #ui .sliders { margin-top: 8px; }
+  #ui .sliders label { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0; }
+  #ui .sliders .sl { width: 34px; color: #e8c27a; }
+  #ui .sliders input { flex: 1; accent-color: #e8b45a; }
+  #ui .sliders .sv { width: 92px; font-size: 12px; color: #cbbfae; }
   #ui button.on { border-color: #e8b45a; color: #ffd98f; }
   #ui .keys { font-size: 12px; color: #9d917f; margin-top: 8px; }
   #toggle { position: fixed; top: 12px; right: 12px; font: 13px Georgia, serif; color: #f3e6cf; background: rgba(20,17,24,.82); border: 1px solid #3a3242; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
@@ -28,7 +33,7 @@
 <body>
 <div id="ui">
   <h1>Shadow Theatre</h1>
-  <p>Out front, watch the shadow and flip its direction in your mind: imagine looking down on it, then up. Then go backstage to see which way it's really turning. Pick a <b>shape</b> below; <b>Lamp</b> raises or lowers the light.</p>
+  <p>Out front, watch the shadow and flip its direction in your mind: imagine looking down on it, then up. Then go backstage to see which way it's really turning. Pick a <b>shape</b> below. <b>Lamp</b> moves the light up or down, <b>Turn</b> spins it by hand, <b>Tilt</b> tips its axis.</p>
   <div class="row">
     <button data-act="front">Front of house</button>
     <button data-act="back">Backstage</button>
@@ -36,8 +41,8 @@
     <button data-act="reverse">Reverse spin</button>
     <button data-act="speed"></button>
     <button data-act="pause"></button>
-    <button data-act="lamp" style="flex-basis:100%"></button>
   </div>
+  <div class="sliders"></div>
   <div class="row shapes" style="margin-top:8px"></div>
   <div class="keys">Drag to look · WASD / arrows to move · or press <b>Enter VR</b> on your headset</div>
 </div>
@@ -57,7 +62,7 @@ const SPAWN = {
 const SPEEDS = [1.6, 3.1, 5.0], SPEED_NAMES = ['Slow', 'Normal', 'Fast'];
 
 // ---------- State ----------
-let objIdx = 0, lampIdx = 0;
+let objIdx = 0, lampDeg = 0, tiltDeg = 0;
 let where = 'front', speedIdx = 1, spinDir = -1, paused = false, reveal = false, revealAmt = 0;
 
 // ---------- Renderer / scene ----------
@@ -170,8 +175,12 @@ function limb(a, b, r) {
 }
 function ball(r, p, mat = skin, s = [1, 1, 1]) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16), mat); m.position.set(...p); m.scale.set(...s); return m; }
 
+// tiltGroup pivots at the object's centre (screen height) so tilting keeps it framed
+const tiltGroup = new THREE.Group();
+tiltGroup.position.set(0, SCY, FIG_Z);
 const spinner = new THREE.Group();
-spinner.position.set(0, 0.5, FIG_Z);
+spinner.position.set(0, 0.5 - SCY, 0);
+tiltGroup.add(spinner);
 const dancer = new THREE.Group();
 dancer.add(
   limb([0, 0.03, 0], [0.03, 0.5, 0], 0.05),            // standing shin (en pointe)
@@ -282,18 +291,18 @@ const icosa = wireframe(new THREE.IcosahedronGeometry(0.72));
 
 const OBJECTS = [
   { name: 'Dancer',       group: dancer,   lamp: 0 },
-  { name: 'Dot cylinder', group: cylinder, lamp: 1 },
-  { name: 'Wire cube',    group: cube,     lamp: 1 },
+  { name: 'Dot cylinder', group: cylinder, lamp: 14 },
+  { name: 'Wire cube',    group: cube,     lamp: 14 },
   { name: 'Dot sphere',   group: sphere,   lamp: 0 },
-  { name: 'Dot torus',    group: torus,    lamp: 1 },
+  { name: 'Dot torus',    group: torus,    lamp: 14 },
   { name: 'Double helix', group: helix,    lamp: 0 },
-  { name: 'Carousel',     group: carousel, lamp: 1 },
-  { name: 'Pyramid',      group: pyramid,  lamp: 1 },
-  { name: 'Hex prism',    group: prism,    lamp: 1 },
-  { name: 'Icosahedron',  group: icosa,    lamp: 1 },
+  { name: 'Carousel',     group: carousel, lamp: 14 },
+  { name: 'Pyramid',      group: pyramid,  lamp: 14 },
+  { name: 'Hex prism',    group: prism,    lamp: 14 },
+  { name: 'Icosahedron',  group: icosa,    lamp: 14 },
 ];
 OBJECTS.forEach((o, i) => { o.group.visible = i === 0; spinner.add(o.group); });
-scene.add(spinner);
+scene.add(tiltGroup);
 
 const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 0.5, 32), std(0x1d1a20, 0.5));
 pedestal.position.set(0, 0.25, FIG_Z); scene.add(pedestal);
@@ -306,9 +315,8 @@ pedestal.layers.enable(1);
 // An orthographic view along the lamp's beam is exactly a parallel-light shadow: no depth, no perspective.
 const shadowCam = new THREE.OrthographicCamera(-SW / 2, SW / 2, SH / 2, -SH / 2, 0.1, 30);
 shadowCam.layers.set(1);
-const LAMPS = [{ name: 'Level', deg: 0 }, { name: 'High', deg: 14 }, { name: 'Low', deg: -14 }];
 function applyLamp() {
-  const off = Math.tan(LAMPS[lampIdx].deg * Math.PI / 180) * (FIG_Z - LAMP_Z), y = SCY + off;
+  const off = Math.tan(lampDeg * Math.PI / 180) * (FIG_Z - LAMP_Z), y = SCY + off;
   shadowCam.position.set(0, y, LAMP_Z); shadowCam.lookAt(0, SCY, FIG_Z);
   lampHead.position.set(0, y, LAMP_Z); lampHead.lookAt(0, SCY, FIG_Z);
   lampStand.scale.y = y; lampStand.position.y = y / 2;
@@ -318,7 +326,7 @@ function applyObject() {
   OBJECTS.forEach((o, i) => { o.group.visible = i === objIdx; });
   // floating objects: no pedestal in the shadow either, so nothing opaque sits in front of the dots
   if (objIdx === 0) pedestal.layers.enable(1); else pedestal.layers.disable(1);
-  lampIdx = OBJECTS[objIdx].lamp; applyLamp();
+  lampDeg = OBJECTS[objIdx].lamp; applyLamp();
 }
 applyLamp();
 const rt = new THREE.WebGLRenderTarget(1024, Math.round(1024 * SH / SW), { samples: 4 });
@@ -335,7 +343,7 @@ screenBack.position.set(0, SCY, SCREEN_Z - 0.01); screenBack.rotation.y = Math.P
 scene.add(screenBack);
 
 // ---------- Control panels ----------
-const CW = 1700, CH = 850;
+const CW = 1700, CH = 1000;
 const panelCanvas = document.createElement('canvas'); panelCanvas.width = CW; panelCanvas.height = CH;
 const pg = panelCanvas.getContext('2d');
 const panelTex = new THREE.CanvasTexture(panelCanvas); panelTex.colorSpace = THREE.SRGBColorSpace; panelTex.anisotropy = 4;
@@ -346,15 +354,28 @@ const BTN = [
   { id: 'reverse', x: 532, y: 320, w: 452, h: 120 },
   { id: 'speed',   x: 40,  y: 470, w: 452, h: 120 },
   { id: 'pause',   x: 532, y: 470, w: 452, h: 120 },
-  { id: 'lamp',    x: 40,  y: 620, w: 944, h: 120 },
 ];
 // shape picker grid: 2 columns x 5 rows on the right
 OBJECTS.forEach((o, i) => BTN.push({ id: 'obj' + i, x: 1040 + (i % 2) * 318, y: 170 + Math.floor(i / 2) * 116, w: 300, h: 100, small: true }));
+// sliders: lamp angle, turn by hand, tilt the spin axis
+const deg = v => (v > 0 ? '+' : '') + Math.round(v) + '°';
+const SLIDERS = [
+  { id: 'lamp', label: 'Lamp', y: 640, min: -25, max: 25, snap: true, get: () => lampDeg, set: v => { lampDeg = v; applyLamp(); }, fmt: v => v > 0 ? deg(v) + ' above' : v < 0 ? deg(v) + ' below' : 'level' },
+  { id: 'turn', label: 'Turn', y: 750, min: 0, max: 360, get: () => ((spinner.rotation.y * 180 / Math.PI) % 360 + 360) % 360, set: v => { paused = true; spinner.rotation.y = v * Math.PI / 180; }, fmt: v => Math.round(v) + '°' },
+  { id: 'tilt', label: 'Tilt', y: 860, min: -30, max: 30, snap: true, get: () => tiltDeg, set: v => { tiltDeg = v; tiltGroup.rotation.x = v * Math.PI / 180; }, fmt: v => v > 0 ? deg(v) + ' to you' : v < 0 ? deg(v) + ' away' : 'upright' },
+];
+const TR_X = 420, TR_W = 530;
+function setSliderFromX(sl, x) {
+  let v = sl.min + Math.max(0, Math.min(1, (x - TR_X) / TR_W)) * (sl.max - sl.min);
+  if (sl.snap && Math.abs(v) < 1.5) v = 0;
+  sl.set(v); refreshUI();
+}
+let draggingIds = new Set();
 function btnLabel(id) {
   if (id.startsWith('obj')) return OBJECTS[+id.slice(3)].name;
   return { front: 'Front of house', back: 'Backstage', reveal: reveal ? 'Hide the figure' : 'Reveal the figure',
            reverse: 'Reverse spin', speed: 'Speed: ' + SPEED_NAMES[speedIdx], pause: paused ? 'Play' : 'Pause',
-           object: 'Object: ' + OBJECTS[objIdx].name, lamp: 'Lamp: ' + LAMPS[lampIdx].name }[id];
+           }[id];
 }
 function btnOn(id) { if (id.startsWith('obj')) return +id.slice(3) === objIdx; return (id === 'reveal' && reveal) || (id === 'pause' && paused) || id === where; }
 function rr(x, y, w, h, r) { pg.beginPath(); pg.moveTo(x + r, y); pg.arcTo(x + w, y, x + w, y + h, r); pg.arcTo(x + w, y + h, x, y + h, r); pg.arcTo(x, y + h, x, y, r); pg.arcTo(x, y, x + w, y, r); pg.closePath(); }
@@ -375,8 +396,18 @@ function drawPanel() {
     pg.fillStyle = btnOn(b.id) ? '#ffd98f' : '#f3e6cf'; pg.font = b.small ? '600 38px Georgia, serif' : '600 44px Georgia, serif';
     pg.fillText(btnLabel(b.id), b.x + b.w / 2, b.y + b.h / 2 + 2);
   }
+  for (const sl of SLIDERS) {
+    const v = sl.get(), t = (v - sl.min) / (sl.max - sl.min), y = sl.y, kx = TR_X + t * TR_W;
+    pg.textAlign = 'left'; pg.fillStyle = '#e8c27a'; pg.font = '600 44px Georgia, serif'; pg.fillText(sl.label, 60, y);
+    pg.fillStyle = '#f3e6cf'; pg.font = '34px Georgia, serif'; pg.fillText(sl.fmt(v), 180, y);
+    rr(TR_X, y - 9, TR_W, 18, 9); pg.fillStyle = '#3a3242'; pg.fill();
+    if (sl.snap) { pg.fillStyle = '#6a5f72'; pg.fillRect(TR_X + TR_W / 2 - 2, y - 22, 4, 44); }
+    pg.beginPath(); pg.arc(kx, y, 26, 0, Math.PI * 2);
+    pg.fillStyle = draggingIds.has(sl.id) || hovered.has('s_' + sl.id) ? '#ffd98f' : '#e8b45a'; pg.fill();
+  }
+  pg.textAlign = 'center';
   pg.fillStyle = '#9d917f'; pg.font = '26px Georgia, serif';
-  pg.fillText('Trigger: press buttons · Left stick: move · Right stick: turn · A / X: front ↔ backstage', CW / 2, 805);
+  pg.fillText('Trigger: press buttons, hold to drag sliders · Left stick: move · Right stick: turn · A / X: front ↔ backstage', CW / 2, 960);
   panelTex.needsUpdate = true;
 }
 const panelMat = new THREE.MeshBasicMaterial({ map: panelTex, transparent: true });
@@ -390,8 +421,11 @@ const panels = [panelFront, panelBack];
 function btnAtUV(uv) {
   const x = uv.x * CW, y = (1 - uv.y) * CH;
   const b = BTN.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
-  return b ? b.id : null;
+  if (b) return b.id;
+  const sl = SLIDERS.find(sl => x >= 40 && x <= 990 && Math.abs(y - sl.y) < 50);
+  return sl ? 's_' + sl.id : null;
 }
+const sliderById = id => SLIDERS.find(sl => 's_' + sl.id === id);
 
 // ---------- Movement ----------
 const tmpV = new THREE.Vector3(), tmpD = new THREE.Vector3();
@@ -432,15 +466,23 @@ function act(id) {
   if (id === 'speed') speedIdx = (speedIdx + 1) % SPEEDS.length;
   if (id === 'pause') paused = !paused;
   if (id.startsWith('obj')) { objIdx = +id.slice(3); applyObject(); }
-  if (id === 'lamp') { lampIdx = (lampIdx + 1) % LAMPS.length; applyLamp(); }
   refreshUI();
 }
 const shapeRow = document.querySelector('#ui .shapes');
 OBJECTS.forEach((o, i) => { const b = document.createElement('button'); b.dataset.act = 'obj' + i; shapeRow.appendChild(b); });
 const htmlBtns = [...document.querySelectorAll('#ui button')];
+const sliderBox = document.querySelector('#ui .sliders');
+SLIDERS.forEach(sl => {
+  const row = document.createElement('label');
+  row.innerHTML = `<span class="sl">${sl.label}</span><input type="range" min="${sl.min}" max="${sl.max}" step="1"><span class="sv"></span>`;
+  const inp = row.querySelector('input');
+  inp.addEventListener('input', () => { let v = +inp.value; if (sl.snap && Math.abs(v) < 1.5) v = 0; sl.set(v); refreshUI(); });
+  sl.input = inp; sl.out = row.querySelector('.sv'); sliderBox.appendChild(row);
+});
+function syncHtmlSliders() { for (const sl of SLIDERS) { if (!sl.input) continue; const v = sl.get(); if (document.activeElement !== sl.input) sl.input.value = v; sl.out.textContent = sl.fmt(v); } }
 htmlBtns.forEach(b => b.addEventListener('click', () => act(b.dataset.act)));
 function refreshUI() {
-  drawPanel();
+  drawPanel(); syncHtmlSliders();
   htmlBtns.forEach(b => { b.textContent = btnLabel(b.dataset.act); b.classList.toggle('on', btnOn(b.dataset.act)); });
 }
 const ui = document.getElementById('ui'), tog = document.getElementById('toggle');
@@ -453,7 +495,12 @@ for (let i = 0; i < 2; i++) {
   const c = renderer.xr.getController(i);
   c.addEventListener('connected', e => { c.userData.src = e.data; });
   c.addEventListener('disconnected', () => { c.userData.src = null; });
-  c.addEventListener('selectstart', () => { const hit = rayHit(c); if (hit && hit.id) act(hit.id); });
+  c.addEventListener('selectstart', () => {
+    const hit = rayHit(c); if (!hit || !hit.id) return;
+    const sl = sliderById(hit.id);
+    if (sl) { c.userData.drag = sl; draggingIds.add(sl.id); setSliderFromX(sl, hit.x); } else act(hit.id);
+  });
+  c.addEventListener('selectend', () => { if (c.userData.drag) { draggingIds.delete(c.userData.drag.id); c.userData.drag = null; drawPanel(); } });
   const line = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.7 }));
   line.scale.z = 4; c.add(line); c.userData.line = line;
   c.add(new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })));
@@ -465,7 +512,7 @@ function rayHit(c) {
   raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
   raycaster.ray.direction.set(0, 0, -1).applyMatrix4(rotM);
   const hit = raycaster.intersectObjects(panels, false)[0];
-  return hit ? { dist: hit.distance, id: btnAtUV(hit.uv) } : null;
+  return hit ? { dist: hit.distance, id: btnAtUV(hit.uv), x: hit.uv.x * CW } : null;
 }
 function updateRays() {
   const now = new Set();
@@ -475,6 +522,7 @@ function updateRays() {
     const hit = rayHit(c);
     c.userData.line.scale.z = hit ? hit.dist : 4;
     if (hit && hit.id) now.add(hit.id);
+    if (c.userData.drag && hit) setSliderFromX(c.userData.drag, hit.x);   // keep dragging while trigger held
   }
   if (now.size !== hovered.size || [...now].some(id => !hovered.has(id))) { hovered = now; drawPanel(); }
 }
@@ -510,15 +558,25 @@ addEventListener('keydown', e => { keys[e.code] = true; });
 addEventListener('keyup', e => { keys[e.code] = false; });
 let drag = null;
 const el = renderer.domElement;
-el.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }; el.setPointerCapture(e.pointerId); });
+function panelUnderPointer(e) {
+  raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  return raycaster.intersectObjects(panels, false)[0];
+}
+el.addEventListener('pointerdown', e => {
+  drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }; el.setPointerCapture(e.pointerId);
+  const hit = panelUnderPointer(e), sl = hit && sliderById(btnAtUV(hit.uv));
+  if (sl) { drag.slider = sl; draggingIds.add(sl.id); setSliderFromX(sl, hit.uv.x * CW); }
+});
 el.addEventListener('pointermove', e => {
   if (!drag || renderer.xr.isPresenting) return;
+  if (drag.slider) { const hit = panelUnderPointer(e); if (hit) setSliderFromX(drag.slider, hit.uv.x * CW); return; }
   dolly.rotation.y -= (e.clientX - drag.x) * 0.004;
   pitch = Math.max(-1.3, Math.min(1.3, pitch - (e.clientY - drag.y) * 0.004));
   camera.rotation.x = pitch;
   drag.x = e.clientX; drag.y = e.clientY;
 });
 el.addEventListener('pointerup', e => {
+  if (drag && drag.slider) { draggingIds.delete(drag.slider.id); drag = null; drawPanel(); return; }
   if (drag && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) {
     raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
     const hit = raycaster.intersectObjects(panels, false)[0];
@@ -541,11 +599,15 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 
 // ---------- Loop ----------
 const clock = new THREE.Clock(), clearCol = new THREE.Color();
+let lastTurnDraw = 0;
 teleport('front');
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
   if (renderer.xr.isPresenting && pendingTeleport > 0 && --pendingTeleport === 0) teleport(where);
-  if (!paused) spinner.rotation.y += spinDir * SPEEDS[speedIdx] * dt;
+  if (!paused) {
+    spinner.rotation.y += spinDir * SPEEDS[speedIdx] * dt;
+    if (clock.elapsedTime - lastTurnDraw > 0.25) { lastTurnDraw = clock.elapsedTime; drawPanel(); syncHtmlSliders(); }  // keep the Turn slider moving
+  }
   xrInput(dt); desktopMove(dt); updateRays();
 
   revealAmt += ((reveal ? 1 : 0) - revealAmt) * Math.min(1, dt * 4);
