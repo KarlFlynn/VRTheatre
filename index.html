@@ -460,21 +460,26 @@ const WATCH = { x: Math.sin(PHI0) * ORBIT_R, z: FIG_Z + Math.cos(PHI0) * ORBIT_R
 let inside = false;
 function makeHotspot(id, text, x, y, z) {
   const g = new THREE.Group(); g.position.set(x, y, z);
-  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd98f }));
-  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.25, depthWrite: false }));
-  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));   // easy-to-aim target
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.03, 20, 14), new THREE.MeshBasicMaterial({ color: 0xffd98f }));
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.055, 20, 14), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.3, depthWrite: false }));
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));   // easy-to-aim target
   hit.userData.hs = id;
-  const tag = label(text, 0.9, 0.18, 90, '#ffd98f'); tag.position.y = 0.24;
+  const tag = label(text, 0.7, 0.14, 90, '#ffd98f'); tag.position.y = 0.14;
   g.add(orb, glow, hit, tag); g.userData = { glow, tag, hit }; g.visible = false;
   scene.add(g); return g;
 }
-const hsIn = makeHotspot('hs_in', 'Jump inside', 0, SCY, FIG_Z);
-const hsOut = makeHotspot('hs_out', 'Step back out', WATCH.x, 1.45, WATCH.z);
+const BASE_Y = 0.3;   // hotspots sit low, at the base
+const hsIn = makeHotspot('hs_in', 'Jump inside', 0, BASE_Y, FIG_Z);
+const hsOut = makeHotspot('hs_out', 'Step back out', WATCH.x, BASE_Y, WATCH.z);
 const outRing = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.3, 40), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.45 }));
 outRing.rotation.x = -Math.PI / 2; outRing.position.set(WATCH.x, 0.006, WATCH.z); scene.add(outRing);
 function updateHotspots(t) {
   const h = headPos();
   hsIn.visible = where === 'back' && !inside;
+  if (hsIn.visible) {   // just outside the base of the object, on the side facing you
+    const dx = h.x, dz = h.z - FIG_Z, d = Math.hypot(dx, dz) || 1;
+    hsIn.position.set(dx / d * 0.95, BASE_Y, FIG_Z + dz / d * 0.95);
+  }
   hsOut.visible = outRing.visible = where === 'back' && Math.hypot(h.x - WATCH.x, h.z - WATCH.z) > 0.7;
   for (const g of [hsIn, hsOut]) {
     if (!g.visible) continue;
