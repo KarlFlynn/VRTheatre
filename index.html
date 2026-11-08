@@ -61,11 +61,11 @@ const SPAWN = {
 // Backstage: you stand on a circle around the object, always facing it
 const ORBIT_R = 2.4, PHI0 = Math.atan2(2.4, -2.1);
 function orbitSpot() { const a = PHI0 + orbitDeg * Math.PI / 180; return { x: Math.sin(a) * ORBIT_R, z: FIG_Z + Math.cos(a) * ORBIT_R, yaw: a }; }
-const SPEEDS = [0.8, 1.6, 3.1, 5.0], SPEED_NAMES = ['Slow', 'Normal', 'Fast', 'Very fast'];
+const SPEEDS = [0.4, 0.8, 1.6, 3.1, 5.0], SPEED_NAMES = ['Very slow', 'Slow', 'Normal', 'Fast', 'Very fast'];
 
 // ---------- State ----------
 let objIdx = 0, lampDeg = 0, tiltDeg = 0, orbitDeg = 0, heightOff = 0, autoOrbit = false;
-let where = 'front', speedIdx = 1, spinDir = -1, paused = false, reveal = false, revealAmt = 0;
+let where = 'front', speedIdx = 0, spinDir = -1, paused = false, reveal = false, revealAmt = 0;
 
 // ---------- Renderer / scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -502,9 +502,10 @@ function jumpInside() {
   } else {
     dolly.position.set(0, SCY - 1.6, FIG_Z); pitch = 0; camera.rotation.x = 0;
   }
+  placeBackPanel();      // panel back to its default spot beside you
   refreshUI();
 }
-function stepOut() { autoOrbit = false; orbitDeg = 0; heightOff = 0; teleport('back'); }
+function stepOut() { autoOrbit = false; orbitDeg = 0; heightOff = 0; teleport('back', false, true); }   // also resets the panel
 
 // ---------- Movement ----------
 const tmpV = new THREE.Vector3(), tmpD = new THREE.Vector3();
