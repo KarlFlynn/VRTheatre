@@ -61,7 +61,7 @@ const SPAWN = {
 // Backstage: you stand on a circle around the object, always facing it
 const ORBIT_R = 2.4, PHI0 = Math.atan2(2.4, -2.1);
 function orbitSpot() { const a = PHI0 + orbitDeg * Math.PI / 180; return { x: Math.sin(a) * ORBIT_R, z: FIG_Z + Math.cos(a) * ORBIT_R, yaw: a }; }
-const SPEEDS = [1.6, 3.1, 5.0], SPEED_NAMES = ['Slow', 'Normal', 'Fast'];
+const SPEEDS = [0.8, 1.6, 3.1, 5.0], SPEED_NAMES = ['Slow', 'Normal', 'Fast', 'Very fast'];
 
 // ---------- State ----------
 let objIdx = 0, lampDeg = 0, tiltDeg = 0, orbitDeg = 0, heightOff = 0, autoOrbit = false;
@@ -378,6 +378,7 @@ const BTN = [
   { id: 'speed',   x: 40,  y: 470, w: 452, h: 120 },
   { id: 'pause',   x: 532, y: 470, w: 452, h: 120 },
   { id: 'auto',    x: 1040, y: 790, w: 618, h: 110 },
+  { id: 'exitvr',  x: 1040, y: 950, w: 618, h: 110, vrOnly: true },
 ];
 // shape picker grid: 2 columns x 5 rows on the right
 OBJECTS.forEach((o, i) => BTN.push({ id: 'obj' + i, x: 1040 + (i % 2) * 318, y: 170 + Math.floor(i / 2) * 116, w: 300, h: 100, small: true }));
@@ -400,7 +401,7 @@ let draggingIds = new Set();
 function btnLabel(id) {
   if (id.startsWith('obj')) return OBJECTS[+id.slice(3)].name;
   return { front: 'Front of house', back: 'Backstage', reveal: reveal ? 'Hide the object' : 'Reveal the object',
-           reverse: 'Reverse spin', speed: 'Speed: ' + SPEED_NAMES[speedIdx], pause: paused ? 'Play' : 'Pause', auto: autoOrbit ? 'Stop orbit' : 'Auto orbit',
+           reverse: 'Reverse spin', speed: 'Speed: ' + SPEED_NAMES[speedIdx], pause: paused ? 'Play' : 'Pause', auto: autoOrbit ? 'Stop orbit' : 'Auto orbit', exitvr: 'Exit VR',
            }[id];
 }
 function btnOn(id) { if (id.startsWith('obj')) return +id.slice(3) === objIdx; return (id === 'reveal' && reveal) || (id === 'pause' && paused) || (id === 'auto' && autoOrbit) || id === where; }
@@ -416,6 +417,7 @@ function drawPanel() {
   pg.fillStyle = '#cbbfae'; pg.font = '30px Georgia, serif';
   pg.fillText(where === 'front' ? 'Watch the shadow. Imagine looking down on it, then up.' : 'This is what is really spinning. Orbit around it.', 512, 128);
   for (const b of BTN) {
+    if (b.vrOnly && !renderer.xr.isPresenting) continue;   // Exit VR only shows in the headset
     rr(b.x, b.y, b.w, b.h, 22);
     pg.fillStyle = hovered.has(b.id) ? '#4a3f2a' : '#2b2531'; pg.fill();
     pg.lineWidth = btnOn(b.id) ? 6 : 3; pg.strokeStyle = btnOn(b.id) ? '#e8b45a' : '#4a4052'; pg.stroke();
@@ -446,7 +448,7 @@ scene.add(panelFront); dolly.add(panelBack);   // the backstage panel travels wi
 const panels = [panelFront, panelBack];
 function btnAtUV(uv) {
   const x = uv.x * CW, y = (1 - uv.y) * CH;
-  const b = BTN.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const b = BTN.find(b => (!b.vrOnly || renderer.xr.isPresenting) && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) return b.id;
   const sl = SLIDERS.find(sl => x >= 40 && x <= 990 && Math.abs(y - sl.y) < 50);
   return sl ? 's_' + sl.id : null;
@@ -518,6 +520,7 @@ function act(id) {
   if (id === 'reverse') spinDir *= -1;
   if (id === 'speed') speedIdx = (speedIdx + 1) % SPEEDS.length;
   if (id === 'pause') paused = !paused;
+  if (id === 'exitvr') { const ses = renderer.xr.getSession(); if (ses) ses.end(); return; }
   if (id === 'auto') { autoOrbit = !autoOrbit; if (autoOrbit && where !== 'back') teleport('back', true); }
   if (id.startsWith('obj')) { objIdx = +id.slice(3); applyObject(); }
   refreshUI();
@@ -601,7 +604,7 @@ function xrInput(dt) {
   }
 }
 let pendingTeleport = 0;
-renderer.xr.addEventListener('sessionstart', () => { pendingTeleport = 3; });
+renderer.xr.addEventListener('sessionstart', () => { pendingTeleport = 3; drawPanel(); });
 renderer.xr.addEventListener('sessionend', () => {
   camera.position.set(0, 1.6, 0); camera.quaternion.identity(); teleport(where);
 });
