@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Theatre</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a090c; font-family: Georgia, serif; color: #f3e6cf; }
+  canvas { display: block; touch-action: none; }
+  #ui { position: fixed; top: 12px; left: 12px; max-width: 340px; background: rgba(20,17,24,.82); border: 1px solid #3a3242; border-radius: 12px; padding: 12px 14px; }
+  #ui h1 { font-size: 18px; margin: 0 0 6px; letter-spacing: .04em; }
+  #ui p { font-size: 13px; line-height: 1.4; margin: 0 0 10px; color: #cbbfae; }
+  #ui .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  #ui button { flex: 1 1 45%; font: 13px Georgia, serif; color: #f3e6cf; background: #2b2531; border: 1px solid #4a4052; border-radius: 8px; padding: 8px 6px; cursor: pointer; }
+  #ui button:hover { background: #3a3242; }
+  #ui .shapes button { flex: 1 1 30%; font-size: 12px; padding: 6px 4px; }
+  #ui .sliders { margin-top: 8px; }
+  #ui .sliders label { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0; }
+  #ui .sliders .sl { width: 34px; color: #e8c27a; }
+  #ui .sliders input { flex: 1; accent-color: #e8b45a; }
+  #ui .sliders .sv { width: 92px; font-size: 12px; color: #cbbfae; }
+  #ui button.on { border-color: #e8b45a; color: #ffd98f; }
+  #ui .keys { font-size: 12px; color: #9d917f; margin-top: 8px; }
+  #toggle { position: fixed; top: 12px; right: 12px; font: 13px Georgia, serif; color: #f3e6cf; background: rgba(20,17,24,.82); border: 1px solid #3a3242; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="ui">
+  <h1>Shadow Theatre</h1>
+  <p>Out front, watch the shadow and flip its direction in your mind: imagine looking down on it, then up. Then go backstage to see which way it's really turning. Pick a <b>shape</b> below. <b>Lamp</b> moves the light up or down, <b>Turn</b> spins it by hand, <b>Tilt</b> tips its axis. Backstage, <b>Orbit</b> and <b>Height</b> move you around it, and the glowing hotspots let you jump inside the object and back out.</p>
+  <div class="row">
+    <button data-act="front">Front of house</button>
+    <button data-act="back">Backstage</button>
+    <button data-act="reveal"></button>
+    <button data-act="reverse">Reverse spin</button>
+    <button data-act="speed"></button>
+    <button data-act="pause"></button>
+  </div>
+  <div class="sliders"></div>
+  <div class="row shapes" style="margin-top:8px"></div>
+  <div class="keys">Drag to look · WASD / arrows to move · or press <b>Enter VR</b> on your headset</div>
+</div>
+<button id="toggle">Hide help</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+// ---------- Layout ----------
+const SCREEN_Z = -4, FIG_Z = -6.5, LAMP_Z = -9.5;
+const SW = 3.6, SH = 2.6, SCY = 1.7;              // screen width, height, centre height
+const SPAWN = {
+  front: { x: 0,   z: -0.3, yaw: 0 },
+};
+// Backstage: you stand on a circle around the object, always facing it
+const ORBIT_R = 2.4, PHI0 = Math.atan2(2.4, -2.1);
+function orbitSpot() { const a = PHI0 + orbitDeg * Math.PI / 180; return { x: Math.sin(a) * ORBIT_R, z: FIG_Z + Math.cos(a) * ORBIT_R, yaw: a }; }
+const SPEEDS = [0.8, 1.6, 3.1, 5.0], SPEED_NAMES = ['Slow', 'Normal', 'Fast', 'Very fast'];
+
+// ---------- State ----------
+let objIdx = 0, lampDeg = 0, tiltDeg = 0, orbitDeg = 0, heightOff = 0, autoOrbit = false;
+let where = 'front', speedIdx = 1, spinDir = -1, paused = false, reveal = false, revealAmt = 0;
+
+// ---------- Renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a090c);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
+camera.position.set(0, 1.6, 0);
+const dolly = new THREE.Group();
+dolly.add(camera);
+scene.add(dolly);
+
+// ---------- Lights ----------
+scene.add(new THREE.HemisphereLight(0x8a90b0, 0x201812, 0.45));
+const screenGlow = new THREE.PointLight(0x8090ff, 0.35, 9, 0);
+screenGlow.position.set(0, SCY, SCREEN_Z + 0.6);
+scene.add(screenGlow);
+const lampLight = new THREE.SpotLight(0xffe2b0, 5, 14, Math.PI / 7, 0.45, 0);
+lampLight.position.set(0, SCY, LAMP_Z + 0.35);
+lampLight.target.position.set(0, 1.4, FIG_Z);
+scene.add(lampLight, lampLight.target);
+const revealLight = new THREE.SpotLight(0xdfe6ff, 0, 10, Math.PI / 8, 0.5, 0);
+revealLight.position.set(0, 3.2, SCREEN_Z + 1.5);
+revealLight.target.position.set(0, 1.4, FIG_Z);
+scene.add(revealLight, revealLight.target);
+
+// ---------- Room ----------
+const std = (color, rough = 0.85) => new THREE.MeshStandardMaterial({ color, roughness: rough });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 15), std(0x2a1d16, 0.8));
+floor.rotation.x = -Math.PI / 2; floor.position.z = -3.5;
+scene.add(floor);
+const wallMat = std(0x16131a);
+function box(w, h, d, mat, x, y, z) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); scene.add(m); return m; }
+box(14, 5, 0.2, wallMat, 0, 2.5, -11);
+box(14, 5, 0.2, wallMat, 0, 2.5, 4);
+box(0.2, 5, 15, wallMat, -7, 2.5, -3.5);
+box(0.2, 5, 15, wallMat, 7, 2.5, -3.5);
+// benches
+const benchMat = std(0x3b2a20, 0.7);
+box(5, 0.45, 0.42, benchMat, 0, 0.225, 1.3);
+box(5, 0.45, 0.42, benchMat, 0, 0.225, 2.6);
+
+// curtains with folds
+const curtainMat = new THREE.MeshStandardMaterial({ color: 0x6e0f17, roughness: 0.9, side: THREE.DoubleSide });
+function curtain(w, h, x, y, z) {
+  const g = new THREE.PlaneGeometry(w, h, 40, 1), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 18) * 0.05);
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, curtainMat); m.position.set(x, y, z); scene.add(m); return m;
+}
+curtain(1.0, 4.4, -2.5, 2.2, SCREEN_Z + 0.05);
+curtain(1.0, 4.4,  2.5, 2.2, SCREEN_Z + 0.05);
+curtain(6.0, 1.4,  0,   3.7, SCREEN_Z + 0.09);
+box(4.0, 0.4, 0.12, std(0x1c1418), 0, 0.2, SCREEN_Z);           // apron under screen
+// screen frame
+const frameMat = std(0x120f12, 0.6);
+box(SW + 0.12, 0.06, 0.06, frameMat, 0, SCY + SH / 2 + 0.03, SCREEN_Z);
+box(SW + 0.12, 0.06, 0.06, frameMat, 0, SCY - SH / 2 - 0.03, SCREEN_Z);
+box(0.06, SH, 0.06, frameMat, -SW / 2 - 0.03, SCY, SCREEN_Z);
+box(0.06, SH, 0.06, frameMat,  SW / 2 + 0.03, SCY, SCREEN_Z);
+
+// lamp (height adjustable)
+const lampMat = std(0x222024, 0.5);
+const lampStand = box(0.06, 1, 0.06, lampMat, 0, 0.5, LAMP_Z);
+const lampHead = new THREE.Group(); scene.add(lampHead);
+lampHead.add(new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, 0.5), lampMat));
+const lens = new THREE.Mesh(new THREE.CircleGeometry(0.13, 32), new THREE.MeshBasicMaterial({ color: 0xfff2d0 }));
+lens.position.z = 0.26; lampHead.add(lens);
+
+// text labels
+function label(text, w, h, size, color = '#f3e6cf') {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024 * h / w);
+  const g = c.getContext('2d');
+  g.font = `600 ${size}px Georgia, serif`;
+  const fit = Math.min(1, c.width * 0.92 / g.measureText(text).width);   // never wider than the sign
+  g.fillStyle = color; g.font = `600 ${Math.floor(size * fit)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, c.width / 2, c.height / 2);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: t, transparent: true }));
+}
+const title = label('SHADOW THEATRE', 3.4, 0.42, 120, '#e8c27a');
+title.position.set(0, 3.75, SCREEN_Z + 0.2); scene.add(title);
+for (const sx of [-1, 1]) {
+  const s = label('↑  BACKSTAGE  ↑', 1.6, 0.3, 110, '#cbbfae');
+  s.position.set(sx * 4.6, 2.6, SCREEN_Z + 0.1);
+  scene.add(s);
+  const f = label('FRONT OF HOUSE', 1.8, 0.3, 100, '#cbbfae');
+  f.position.set(sx * 4.6, 2.6, SCREEN_Z - 0.1); f.rotation.y = Math.PI; scene.add(f);
+}
+// spawn markers
+{
+  const r = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.29, 40), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.35 }));
+  r.rotation.x = -Math.PI / 2; r.position.set(SPAWN.front.x, 0.005, SPAWN.front.z); scene.add(r);
+  const path = new THREE.Mesh(new THREE.RingGeometry(ORBIT_R - 0.02, ORBIT_R + 0.02, 128), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.25 }));
+  path.rotation.x = -Math.PI / 2; path.position.set(0, 0.005, FIG_Z); scene.add(path);   // orbit path backstage
+}
+
+// ---------- The dancer (original figure from primitives) ----------
+const Y = new THREE.Vector3(0, 1, 0);
+const skin = new THREE.MeshStandardMaterial({ color: 0xe9e4dc, roughness: 0.45 });
+const tutuMat = new THREE.MeshStandardMaterial({ color: 0xf0d6d9, roughness: 0.6 });
+function limb(a, b, r) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A), len = d.length();
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), skin);
+  m.position.copy(A).add(B).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(Y, d.normalize());
+  return m;
+}
+function ball(r, p, mat = skin, s = [1, 1, 1]) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16), mat); m.position.set(...p); m.scale.set(...s); return m; }
+
+// tiltGroup pivots at the object's centre (screen height) so tilting keeps it framed
+const tiltGroup = new THREE.Group();
+tiltGroup.position.set(0, SCY, FIG_Z);
+const spinner = new THREE.Group();
+spinner.position.set(0, 0.5 - SCY, 0);
+tiltGroup.add(spinner);
+const dancer = new THREE.Group();
+dancer.add(
+  limb([0, 0.03, 0], [0.03, 0.5, 0], 0.05),            // standing shin (en pointe)
+  limb([0.03, 0.5, 0], [0.06, 0.95, 0], 0.068),        // standing thigh
+  limb([0.09, 0.96, 0], [0.40, 1.03, -0.22], 0.066),   // raised thigh
+  limb([0.40, 1.03, -0.22], [0.68, 0.90, -0.43], 0.05),// raised shin
+  ball(0.11, [0.06, 0.99, 0], skin, [1.25, 0.8, 0.95]),// pelvis
+  limb([0.06, 1.03, 0], [0.04, 1.40, 0], 0.105),       // torso
+  limb([0.04, 1.45, 0], [0.04, 1.56, 0], 0.038),       // neck
+  ball(0.095, [0.04, 1.65, 0.01]),                      // head
+  ball(0.05, [0.04, 1.73, -0.08]),                      // bun
+  limb([-0.1, 1.42, 0], [-0.22, 1.68, 0.06], 0.038),   // left upper arm (overhead)
+  limb([-0.22, 1.68, 0.06], [-0.05, 1.92, 0.1], 0.032),
+  limb([0.18, 1.42, 0], [0.42, 1.48, 0.14], 0.038),    // right upper arm (out to side)
+  limb([0.42, 1.48, 0.14], [0.63, 1.40, 0.30], 0.032)
+);
+const tutu = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.42, 0.09, 28), tutuMat);
+tutu.position.set(0.06, 0.98, 0); tutu.rotation.x = 0.07; dancer.add(tutu);
+
+// --- Other ambiguous objects (all centred on the spin axis, centre ~1.2 m above the pedestal) ---
+const C = 1.2;
+const dotMat = new THREE.MeshBasicMaterial({ color: 0xffffff });          // stars glow in their own colour
+const haloMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false });
+const STAR_COLS = [[0xf4f6ff, 0.5], [0x7fa8ff, 0.3], [0xff6b5a, 0.2]].map(([c, w]) => [new THREE.Color(c), w]);
+function starColour() { let r = Math.random(); for (const [c, w] of STAR_COLS) { if ((r -= w) <= 0) return c; } return STAR_COLS[0][0]; }
+const rimMat = new THREE.MeshStandardMaterial({ color: 0xf4efe6, roughness: 0.3, emissive: 0x332a20 });
+const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c8, roughness: 0.1, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide });
+const dotGeo = new THREE.IcosahedronGeometry(0.0105, 1);
+function dots(points, geo = dotGeo, sizeVar = true) {
+  const g = new THREE.Group(), M = new THREE.Matrix4(), q = new THREE.Quaternion(), S = new THREE.Vector3();
+  const core = new THREE.InstancedMesh(geo, dotMat, points.length), halo = new THREE.InstancedMesh(geo, haloMat, points.length);
+  points.forEach((p, i) => {
+    const k = sizeVar ? 0.7 + Math.random() * 0.8 : 1, col = starColour();   // each star keeps its own size and colour
+    core.setMatrixAt(i, M.compose(p, q, S.setScalar(k))); core.setColorAt(i, col);
+    halo.setMatrixAt(i, M.compose(p, q, S.setScalar(k * 2.2))); halo.setColorAt(i, col);
+  });
+  halo.userData.screenOnly = true;          // the glow only appears on the screen, not on the real object
+  g.add(core, halo);
+  return g;
+}
+function glass(geo, y) { const g = new THREE.Mesh(geo, glassMat); g.position.y = y; g.userData.noShadow = true; return g; }
+
+// Dot cylinder (structure-from-motion classic)
+const cylinder = new THREE.Group();
+{
+  const R = 0.62, H = 1.5, pts = [];
+  for (let i = 0; i < 900; i++) { const a = Math.random() * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * R, C - H / 2 + Math.random() * H, Math.sin(a) * R)); }
+  cylinder.add(dots(pts));
+  for (const y of [C - H / 2, C + H / 2]) { const t = new THREE.Mesh(new THREE.TorusGeometry(R, 0.009, 6, 128), rimMat); t.rotation.x = Math.PI / 2; t.position.y = y; cylinder.add(t); }
+  cylinder.add(glass(new THREE.CylinderGeometry(R, R, H, 48, 1, true), C));
+}
+// Dot sphere
+const sphere = new THREE.Group();
+{
+  const R = 0.78, pts = [];
+  for (let i = 0; i < 1100; i++) pts.push(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(R).add(new THREE.Vector3(0, C, 0)));
+  for (const p of pts) if (!isFinite(p.x)) p.set(0, C + R, 0);
+  sphere.add(dots(pts), glass(new THREE.SphereGeometry(R, 40, 24), C));
+}
+// Wireframe cube (spinning Necker cube)
+const cube = new THREE.Group();
+{
+  const s = 0.55, v = [-s, s];
+  for (const a of v) for (const b of v) {
+    cube.add(limb([a, C - s, b], [a, C + s, b], 0.014));
+    cube.add(limb([-s, C + a, b], [s, C + a, b], 0.014));
+    cube.add(limb([a, C + b, -s], [a, C + b, s], 0.014));
+  }
+  cube.add(glass(new THREE.BoxGeometry(2 * s, 2 * s, 2 * s), C));
+}
+// Dot torus (donut lying flat)
+const torus = new THREE.Group();
+{
+  const R = 0.58, r = 0.22, pts = [];
+  while (pts.length < 1100) {
+    const u = Math.random() * Math.PI * 2, v = Math.random() * Math.PI * 2;
+    if (Math.random() * (R + r) > R + r * Math.cos(v)) continue;   // even density over the surface
+    const d = R + r * Math.cos(v);
+    pts.push(new THREE.Vector3(Math.cos(u) * d, C + r * Math.sin(v), Math.sin(u) * d));
+  }
+  torus.add(dots(pts), glass(new THREE.TorusGeometry(R, r, 24, 64).rotateX(Math.PI / 2), C));
+}
+// Double helix (DNA-style)
+const helix = new THREE.Group();
+{
+  const R = 0.42, H = 1.7, turns = 2.5, n = 170, pts = [];
+  const bigDot = new THREE.IcosahedronGeometry(0.016, 1);
+  for (let k = 0; k < 2; k++) for (let i = 0; i < n; i++) {
+    const t = i / (n - 1), a = t * turns * Math.PI * 2 + k * Math.PI;
+    pts.push(new THREE.Vector3(Math.cos(a) * R, C - H / 2 + t * H, Math.sin(a) * R));
+  }
+  helix.add(dots(pts, bigDot));
+  for (let i = 0; i < n; i += 10) {           // rungs
+    const t = i / (n - 1), a = t * turns * Math.PI * 2, y = C - H / 2 + t * H;
+    helix.add(limb([Math.cos(a) * R, y, Math.sin(a) * R], [-Math.cos(a) * R, y, -Math.sin(a) * R], 0.008));
+  }
+}
+// Carousel of balls
+const carousel = new THREE.Group();
+{
+  const ballGeo = new THREE.SphereGeometry(0.045, 20, 14), pts = [];
+  for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * 0.62, C, Math.sin(a) * 0.62)); }
+  carousel.add(dots(pts, ballGeo, false));
+}
+// Wireframe solids built from a geometry's edges
+function wireframe(geo) {
+  const g = new THREE.Group(), e = new THREE.EdgesGeometry(geo).attributes.position;
+  for (let i = 0; i < e.count; i += 2)
+    g.add(limb([e.getX(i), e.getY(i) + C, e.getZ(i)], [e.getX(i + 1), e.getY(i + 1) + C, e.getZ(i + 1)], 0.014));
+  g.add(glass(geo, C));
+  return g;
+}
+const pyramid = wireframe(new THREE.ConeGeometry(0.72, 1.15, 4));
+const prism = wireframe(new THREE.CylinderGeometry(0.55, 0.55, 1.15, 6));
+const icosa = wireframe(new THREE.IcosahedronGeometry(0.72));
+
+const OBJECTS = [
+  { name: 'Dot cylinder', group: cylinder, lamp: 14 },
+  { name: 'Wire cube',    group: cube,     lamp: 14 },
+  { name: 'Dot sphere',   group: sphere,   lamp: 0 },
+  { name: 'Dot torus',    group: torus,    lamp: 14 },
+  { name: 'Double helix', group: helix,    lamp: 0 },
+  { name: 'Carousel',     group: carousel, lamp: 14 },
+  { name: 'Pyramid',      group: pyramid,  lamp: 14 },
+  { name: 'Hex prism',    group: prism,    lamp: 14 },
+  { name: 'Icosahedron',  group: icosa,    lamp: 14 },
+];
+OBJECTS.forEach((o, i) => { o.group.visible = i === 0; spinner.add(o.group); });
+scene.add(tiltGroup);
+
+const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 0.5, 32), std(0x1d1a20, 0.5));
+pedestal.position.set(0, 0.25, FIG_Z); scene.add(pedestal);
+
+// Only these objects cast the shadow (layer 1); glass shells are for backstage looks only
+spinner.traverse(o => { if (o.userData.screenOnly) o.layers.set(1); else if (!o.userData.noShadow) o.layers.enable(1); });
+// What each piece looks like on the screen: stars keep their colours, lines become faint starlight
+const lineScreenMat = new THREE.MeshBasicMaterial({ color: 0xb8c6ff });
+const screenMeshes = [];
+spinner.traverse(o => { if (o.isMesh && o.layers.isEnabled(1)) screenMeshes.push(o); });
+function screenLook(on) {
+  for (const m of screenMeshes) {
+    if (on) { m.userData.realMat = m.material; if (m.material !== dotMat && m.material !== haloMat) m.material = lineScreenMat; }
+    else m.material = m.userData.realMat;
+  }
+}
+pedestal.layers.enable(1);
+
+// ---------- The shadow: parallel light from the lamp, rendered straight onto the screen ----------
+// An orthographic view along the lamp's beam is exactly a parallel-light shadow: no depth, no perspective.
+const shadowCam = new THREE.OrthographicCamera(-SW / 2, SW / 2, SH / 2, -SH / 2, 0.1, 30);
+shadowCam.layers.set(1);
+function applyLamp() {
+  const off = Math.tan(lampDeg * Math.PI / 180) * (FIG_Z - LAMP_Z), y = SCY + off;
+  shadowCam.position.set(0, y, LAMP_Z); shadowCam.lookAt(0, SCY, FIG_Z);
+  lampHead.position.set(0, y, LAMP_Z); lampHead.lookAt(0, SCY, FIG_Z);
+  lampStand.scale.y = y; lampStand.position.y = y / 2;
+  lens.getWorldPosition(lampLight.position);
+}
+function applyObject() {
+  OBJECTS.forEach((o, i) => { o.group.visible = i === objIdx; });
+  // floating objects: no pedestal in the shadow either, so nothing opaque sits in front of the dots
+  pedestal.layers.disable(1);
+  lampDeg = OBJECTS[objIdx].lamp; applyLamp();
+}
+applyObject();
+const rt = new THREE.WebGLRenderTarget(1536, Math.round(1536 * SH / SW), { samples: 4 });
+const SPACE = 0x03040b;   // night-sky screen colour
+
+// Audience side: seen from the front, so mirror the image horizontally
+const frontGeo = new THREE.PlaneGeometry(SW, SH);
+{ const uv = frontGeo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i)); }
+const screenFront = new THREE.Mesh(frontGeo, new THREE.MeshBasicMaterial({ map: rt.texture, color: 0xffffff, transparent: true }));
+screenFront.position.set(0, SCY, SCREEN_Z + 0.01);
+scene.add(screenFront);
+const screenBack = new THREE.Mesh(new THREE.PlaneGeometry(SW, SH), new THREE.MeshBasicMaterial({ map: rt.texture, color: 0xb0b0b8 }));
+screenBack.position.set(0, SCY, SCREEN_Z - 0.01); screenBack.rotation.y = Math.PI;
+scene.add(screenBack);
+
+// ---------- Control panels ----------
+const CW = 1700, CH = 1220;
+const panelCanvas = document.createElement('canvas'); panelCanvas.width = CW; panelCanvas.height = CH;
+const pg = panelCanvas.getContext('2d');
+const panelTex = new THREE.CanvasTexture(panelCanvas); panelTex.colorSpace = THREE.SRGBColorSpace; panelTex.anisotropy = 4;
+const BTN = [
+  { id: 'front',   x: 40,  y: 170, w: 452, h: 120 },
+  { id: 'back',    x: 532, y: 170, w: 452, h: 120 },
+  { id: 'reveal',  x: 40,  y: 320, w: 452, h: 120 },
+  { id: 'reverse', x: 532, y: 320, w: 452, h: 120 },
+  { id: 'speed',   x: 40,  y: 470, w: 452, h: 120 },
+  { id: 'pause',   x: 532, y: 470, w: 452, h: 120 },
+  { id: 'auto',    x: 1040, y: 790, w: 618, h: 110 },
+  { id: 'exitvr',  x: 1040, y: 950, w: 618, h: 110, vrOnly: true },
+];
+// shape picker grid: 2 columns x 5 rows on the right
+OBJECTS.forEach((o, i) => BTN.push({ id: 'obj' + i, x: 1040 + (i % 2) * 318, y: 170 + Math.floor(i / 2) * 116, w: 300, h: 100, small: true }));
+// sliders: lamp angle, turn by hand, tilt the spin axis
+const deg = v => (v > 0 ? '+' : '') + Math.round(v) + '°';
+const SLIDERS = [
+  { id: 'lamp', label: 'Lamp', y: 640, min: -25, max: 25, snap: 1.5, get: () => lampDeg, set: v => { lampDeg = v; applyLamp(); }, fmt: v => v > 0 ? deg(v) + ' above' : v < 0 ? deg(v) + ' below' : 'level' },
+  { id: 'turn', label: 'Turn', y: 750, min: 0, max: 360, get: () => ((spinner.rotation.y * 180 / Math.PI) % 360 + 360) % 360, set: v => { paused = true; spinner.rotation.y = v * Math.PI / 180; }, fmt: v => Math.round(v) + '°' },
+  { id: 'tilt', label: 'Tilt', y: 860, min: -30, max: 30, snap: 1.5, get: () => tiltDeg, set: v => { tiltDeg = v; tiltGroup.rotation.x = v * Math.PI / 180; }, fmt: v => v > 0 ? deg(v) + ' to you' : v < 0 ? deg(v) + ' away' : 'upright' },
+  { id: 'orbit', label: 'Orbit', y: 970, min: 0, max: 360, get: () => orbitDeg, set: v => { autoOrbit = false; setOrbit(v); }, fmt: v => Math.round(v) + '°' },
+  { id: 'height', label: 'Height', y: 1080, min: -0.8, max: 1.2, step: 0.05, snap: 0.06, get: () => heightOff, set: v => setHeight(v), fmt: v => v > 0 ? '+' + v.toFixed(1) + ' m up' : v < 0 ? v.toFixed(1) + ' m down' : 'eye level' },
+];
+const TR_X = 470, TR_W = 490;
+function setSliderFromX(sl, x) {
+  let v = sl.min + Math.max(0, Math.min(1, (x - TR_X) / TR_W)) * (sl.max - sl.min);
+  if (sl.snap && Math.abs(v) < sl.snap) v = 0;
+  sl.set(v); refreshUI();
+}
+let draggingIds = new Set();
+function btnLabel(id) {
+  if (id.startsWith('obj')) return OBJECTS[+id.slice(3)].name;
+  return { front: 'Front of house', back: 'Backstage', reveal: reveal ? 'Hide the object' : 'Reveal the object',
+           reverse: 'Reverse spin', speed: 'Speed: ' + SPEED_NAMES[speedIdx], pause: paused ? 'Play' : 'Pause', auto: autoOrbit ? 'Stop orbit' : 'Auto orbit', exitvr: 'Exit VR',
+           }[id];
+}
+function btnOn(id) { if (id.startsWith('obj')) return +id.slice(3) === objIdx; return (id === 'reveal' && reveal) || (id === 'pause' && paused) || (id === 'auto' && autoOrbit) || id === where; }
+function rr(x, y, w, h, r) { pg.beginPath(); pg.moveTo(x + r, y); pg.arcTo(x + w, y, x + w, y + h, r); pg.arcTo(x + w, y + h, x, y + h, r); pg.arcTo(x, y + h, x, y, r); pg.arcTo(x, y, x + w, y, r); pg.closePath(); }
+let hovered = new Set();
+function drawPanel() {
+  pg.clearRect(0, 0, CW, CH);
+  rr(4, 4, CW - 8, CH - 8, 36); pg.fillStyle = 'rgba(22,18,26,0.92)'; pg.fill();
+  pg.lineWidth = 4; pg.strokeStyle = '#4a4052'; pg.stroke();
+  pg.textAlign = 'center'; pg.textBaseline = 'middle';
+  pg.fillStyle = '#e8c27a'; pg.font = '600 64px Georgia, serif'; pg.fillText('Shadow Theatre', 512, 70);
+  pg.fillStyle = '#e8c27a'; pg.font = '600 44px Georgia, serif'; pg.fillText('Shapes', 1349, 120);
+  pg.fillStyle = '#cbbfae'; pg.font = '30px Georgia, serif';
+  pg.fillText(where === 'front' ? 'Watch the shadow. Imagine looking down on it, then up.' : 'This is what is really spinning. Orbit around it.', 512, 128);
+  for (const b of BTN) {
+    if (b.vrOnly && !renderer.xr.isPresenting) continue;   // Exit VR only shows in the headset
+    rr(b.x, b.y, b.w, b.h, 22);
+    pg.fillStyle = hovered.has(b.id) ? '#4a3f2a' : '#2b2531'; pg.fill();
+    pg.lineWidth = btnOn(b.id) ? 6 : 3; pg.strokeStyle = btnOn(b.id) ? '#e8b45a' : '#4a4052'; pg.stroke();
+    pg.fillStyle = btnOn(b.id) ? '#ffd98f' : '#f3e6cf'; pg.font = b.small ? '600 38px Georgia, serif' : '600 44px Georgia, serif';
+    pg.fillText(btnLabel(b.id), b.x + b.w / 2, b.y + b.h / 2 + 2);
+  }
+  for (const sl of SLIDERS) {
+    const v = sl.get(), t = (v - sl.min) / (sl.max - sl.min), y = sl.y, kx = TR_X + t * TR_W;
+    pg.textAlign = 'left'; pg.fillStyle = '#e8c27a'; pg.font = '600 44px Georgia, serif'; pg.fillText(sl.label, 60, y);
+    pg.fillStyle = '#f3e6cf'; pg.font = '34px Georgia, serif'; pg.fillText(sl.fmt(v), 230, y);
+    rr(TR_X, y - 9, TR_W, 18, 9); pg.fillStyle = '#3a3242'; pg.fill();
+    if (sl.snap) { pg.fillStyle = '#6a5f72'; pg.fillRect(TR_X + TR_W / 2 - 2, y - 22, 4, 44); }
+    pg.beginPath(); pg.arc(kx, y, 26, 0, Math.PI * 2);
+    pg.fillStyle = draggingIds.has(sl.id) || hovered.has('s_' + sl.id) ? '#ffd98f' : '#e8b45a'; pg.fill();
+  }
+  pg.textAlign = 'center';
+  pg.fillStyle = '#9d917f'; pg.font = '26px Georgia, serif';
+  pg.fillText('Trigger: press buttons, hold to drag sliders · Left stick: move · Right stick: turn · A / X: front ↔ backstage', CW / 2, 1175);
+  panelTex.needsUpdate = true;
+}
+const panelMat = new THREE.MeshBasicMaterial({ map: panelTex, transparent: true });
+const PW = 1.2, PH = PW * CH / CW;
+const panelFront = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), panelMat);
+panelFront.position.set(-1.05, 1.15, -1.25); panelFront.lookAt(0, 1.45, -0.2);
+const panelBack = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), panelMat);
+panelBack.scale.setScalar(0.8); panelBack.visible = false;
+scene.add(panelFront); dolly.add(panelBack);   // the backstage panel travels with you
+const panels = [panelFront, panelBack];
+function btnAtUV(uv) {
+  const x = uv.x * CW, y = (1 - uv.y) * CH;
+  const b = BTN.find(b => (!b.vrOnly || renderer.xr.isPresenting) && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  if (b) return b.id;
+  const sl = SLIDERS.find(sl => x >= 40 && x <= 990 && Math.abs(y - sl.y) < 50);
+  return sl ? 's_' + sl.id : null;
+}
+const sliderById = id => SLIDERS.find(sl => 's_' + sl.id === id);
+
+// ---------- Backstage hotspots: jump inside the object, and back out to the watch point ----------
+const WATCH = { x: Math.sin(PHI0) * ORBIT_R, z: FIG_Z + Math.cos(PHI0) * ORBIT_R };
+let inside = false;
+function makeHotspot(id, text, x, y, z) {
+  const g = new THREE.Group(); g.position.set(x, y, z);
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffd98f }));
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.25, depthWrite: false }));
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));   // easy-to-aim target
+  hit.userData.hs = id;
+  const tag = label(text, 0.9, 0.18, 90, '#ffd98f'); tag.position.y = 0.24;
+  g.add(orb, glow, hit, tag); g.userData = { glow, tag, hit }; g.visible = false;
+  scene.add(g); return g;
+}
+const hsIn = makeHotspot('hs_in', 'Jump inside', 0, SCY, FIG_Z);
+const hsOut = makeHotspot('hs_out', 'Step back out', WATCH.x, 1.45, WATCH.z);
+const outRing = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.3, 40), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: 0.45 }));
+outRing.rotation.x = -Math.PI / 2; outRing.position.set(WATCH.x, 0.006, WATCH.z); scene.add(outRing);
+function updateHotspots(t) {
+  const h = headPos();
+  hsIn.visible = where === 'back' && !inside;
+  hsOut.visible = outRing.visible = where === 'back' && Math.hypot(h.x - WATCH.x, h.z - WATCH.z) > 0.7;
+  for (const g of [hsIn, hsOut]) {
+    if (!g.visible) continue;
+    const hov = hovered.has(g.userData.hit.userData.hs);
+    g.userData.glow.scale.setScalar((hov ? 1.5 : 1) * (1 + 0.15 * Math.sin(t * 4)));
+    g.userData.tag.lookAt(h);
+  }
+}
+function pickables() {
+  return [...panels.filter(p => p.visible), ...[hsIn, hsOut].filter(g => g.visible).map(g => g.userData.hit)];
+}
+function idFromHit(hit) { return hit.object.userData.hs || btnAtUV(hit.uv); }
+function jumpInside() {
+  if (where !== 'back') teleport('back', true);
+  autoOrbit = false; inside = true;
+  if (renderer.xr.isPresenting) {
+    const h = headPos();
+    dolly.position.x += 0 - h.x; dolly.position.z += FIG_Z - h.z;
+    dolly.position.y = SCY - camera.position.y;        // your eyes at the object's centre
+  } else {
+    dolly.position.set(0, SCY - 1.6, FIG_Z); pitch = 0; camera.rotation.x = 0;
+  }
+  refreshUI();
+}
+function stepOut() { autoOrbit = false; orbitDeg = 0; heightOff = 0; teleport('back'); }
+
+// ---------- Movement ----------
+const tmpV = new THREE.Vector3(), tmpD = new THREE.Vector3();
+function headPos() { camera.getWorldPosition(tmpV); return tmpV.clone(); }
+function headYaw() { camera.getWorldDirection(tmpD); return Math.atan2(-tmpD.x, -tmpD.z); }
+function moveHead(dx, dz) {
+  const h = headPos(); let nx = h.x + dx, nz = h.z + dz;
+  nx = Math.max(-6.6, Math.min(6.6, nx)); nz = Math.max(-10.6, Math.min(3.6, nz));
+  // can't walk through the screen or curtains
+  if (Math.sign(h.z - SCREEN_Z) !== Math.sign(nz - SCREEN_Z) && Math.abs(nx) < 3.05) nz = h.z;
+  dolly.position.x += nx - h.x; dolly.position.z += nz - h.z;
+}
+function rotateAroundHead(a) {
+  const h = headPos();
+  const off = dolly.position.clone().sub(h).applyAxisAngle(Y, a);
+  dolly.position.copy(h).add(off); dolly.rotation.y += a;
+  dolly.updateMatrixWorld(true);
+}
+let pitch = 0;
+// Orbit = swing you (and the panel) around the object's spin axis; never fights your own head turning
+function setOrbit(v) {
+  if (inside) { inside = false; orbitDeg = v; return teleport('back', true); }
+  if (where !== 'back') { orbitDeg = v; return teleport('back', true); }
+  const d = (v - orbitDeg) * Math.PI / 180; orbitDeg = v;
+  const c = new THREE.Vector3(0, dolly.position.y, FIG_Z);
+  dolly.position.sub(c).applyAxisAngle(Y, d).add(c); dolly.rotation.y += d;
+}
+function setHeight(v) {
+  heightOff = v;
+  if (inside) return teleport('back', true);
+  if (where !== 'back') return teleport('back', true);
+  dolly.position.y = v;
+  if (!renderer.xr.isPresenting) { pitch = Math.atan2(SCY - (1.6 + v), ORBIT_R); camera.rotation.x = pitch; }
+}
+// Put the backstage panel to your front-right, then let it ride along with you
+function placeBackPanel() {
+  dolly.updateMatrixWorld(true);
+  const H = headPos(), yaw = headYaw();
+  scene.attach(panelBack);
+  panelBack.position.copy(H).add(new THREE.Vector3(0.75, -0.45, -0.95).applyAxisAngle(Y, yaw));
+  panelBack.lookAt(H.x, H.y - 0.15, H.z);
+  dolly.attach(panelBack);
+}
+function teleport(name, quiet = false, placePanel = false) {
+  const entering = name === 'back' && where !== 'back';
+  inside = false;
+  where = name;
+  const s = name === 'back' ? orbitSpot() : SPAWN[name], y = name === 'back' ? heightOff : 0;
+  if (renderer.xr.isPresenting) {
+    rotateAroundHead(s.yaw - headYaw());
+    const h = headPos();
+    dolly.position.x += s.x - h.x; dolly.position.z += s.z - h.z; dolly.position.y = y;
+  } else {
+    dolly.position.set(s.x, y, s.z); dolly.rotation.y = s.yaw;
+    pitch = name === 'back' ? Math.atan2(SCY - (1.6 + y), ORBIT_R) : 0; camera.rotation.x = pitch;   // look at the object
+  }
+  if (name === 'front') autoOrbit = false;
+  if (entering || placePanel) placeBackPanel();
+  panelBack.visible = where === 'back';
+  if (!quiet) refreshUI();
+}
+
+// ---------- Actions ----------
+function act(id) {
+  if (id === 'front' || id === 'back') return teleport(id);
+  if (id === 'reveal') reveal = !reveal;
+  if (id === 'reverse') spinDir *= -1;
+  if (id === 'speed') speedIdx = (speedIdx + 1) % SPEEDS.length;
+  if (id === 'hs_in') return jumpInside();
+  if (id === 'hs_out') return stepOut();
+  if (id === 'pause') paused = !paused;
+  if (id === 'exitvr') { const ses = renderer.xr.getSession(); if (ses) ses.end(); return; }
+  if (id === 'auto') { autoOrbit = !autoOrbit; if (autoOrbit && where !== 'back') teleport('back', true); }
+  if (id.startsWith('obj')) { objIdx = +id.slice(3); applyObject(); }
+  refreshUI();
+}
+const shapeRow = document.querySelector('#ui .shapes');
+OBJECTS.forEach((o, i) => { const b = document.createElement('button'); b.dataset.act = 'obj' + i; shapeRow.appendChild(b); });
+const htmlBtns = [...document.querySelectorAll('#ui button')];
+const sliderBox = document.querySelector('#ui .sliders');
+SLIDERS.forEach(sl => {
+  const row = document.createElement('label');
+  row.innerHTML = `<span class="sl">${sl.label}</span><input type="range" min="${sl.min}" max="${sl.max}" step="${sl.step || 1}"><span class="sv"></span>`;
+  const inp = row.querySelector('input');
+  inp.addEventListener('input', () => { let v = +inp.value; if (sl.snap && Math.abs(v) < sl.snap) v = 0; sl.set(v); refreshUI(); });
+  sl.input = inp; sl.out = row.querySelector('.sv'); sliderBox.appendChild(row);
+});
+function syncHtmlSliders() { for (const sl of SLIDERS) { if (!sl.input) continue; const v = sl.get(); if (document.activeElement !== sl.input) sl.input.value = v; sl.out.textContent = sl.fmt(v); } }
+htmlBtns.forEach(b => b.addEventListener('click', () => act(b.dataset.act)));
+function refreshUI() {
+  drawPanel(); syncHtmlSliders();
+  htmlBtns.forEach(b => { b.textContent = btnLabel(b.dataset.act); b.classList.toggle('on', btnOn(b.dataset.act)); });
+}
+const ui = document.getElementById('ui'), tog = document.getElementById('toggle');
+tog.addEventListener('click', () => { const hid = ui.style.display === 'none'; ui.style.display = hid ? '' : 'none'; tog.textContent = hid ? 'Hide help' : 'Show help'; });
+
+// ---------- XR controllers ----------
+const rayGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
+const ctrls = [];
+for (let i = 0; i < 2; i++) {
+  const c = renderer.xr.getController(i);
+  c.addEventListener('connected', e => { c.userData.src = e.data; });
+  c.addEventListener('disconnected', () => { c.userData.src = null; });
+  c.addEventListener('selectstart', () => {
+    const hit = rayHit(c); if (!hit || !hit.id) return;
+    const sl = sliderById(hit.id);
+    if (sl) { c.userData.drag = sl; draggingIds.add(sl.id); setSliderFromX(sl, hit.x); } else act(hit.id);
+  });
+  c.addEventListener('selectend', () => { if (c.userData.drag) { draggingIds.delete(c.userData.drag.id); c.userData.drag = null; drawPanel(); } });
+  const line = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.7 }));
+  line.scale.z = 4; c.add(line); c.userData.line = line;
+  c.add(new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })));
+  dolly.add(c); ctrls.push(c);
+}
+const raycaster = new THREE.Raycaster(), rotM = new THREE.Matrix4();
+function rayHit(c) {
+  rotM.identity().extractRotation(c.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(rotM);
+  const hit = raycaster.intersectObjects(pickables(), false)[0];
+  return hit ? { dist: hit.distance, id: idFromHit(hit), x: hit.uv ? hit.uv.x * CW : 0, hs: !!hit.object.userData.hs } : null;
+}
+function updateRays() {
+  const now = new Set();
+  for (const c of ctrls) {
+    c.visible = renderer.xr.isPresenting && !!c.userData.src;
+    if (!c.visible) continue;
+    const hit = rayHit(c);
+    c.userData.line.scale.z = hit ? hit.dist : 4;
+    if (hit && hit.id) now.add(hit.id);
+    if (c.userData.drag && hit && !hit.hs) setSliderFromX(c.userData.drag, hit.x);   // keep dragging while trigger held
+  }
+  if (now.size !== hovered.size || [...now].some(id => !hovered.has(id))) { hovered = now; drawPanel(); }
+}
+function xrInput(dt) {
+  if (!renderer.xr.isPresenting) return;
+  for (const c of ctrls) {
+    const src = c.userData.src; if (!src || !src.gamepad) continue;
+    const gp = src.gamepad, ax = gp.axes;
+    const x = ax.length >= 4 ? ax[2] : (ax[0] || 0), y = ax.length >= 4 ? ax[3] : (ax[1] || 0);
+    if (src.handedness === 'left') {
+      if (Math.abs(x) > 0.15 || Math.abs(y) > 0.15) {
+        const yaw = headYaw(), sp = 1.8 * dt;
+        moveHead((Math.cos(yaw) * x - Math.sin(yaw) * -y) * sp, (-Math.sin(yaw) * x - Math.cos(yaw) * -y) * sp);
+      }
+    } else {
+      if (Math.abs(x) > 0.7 && !c.userData.turned) { rotateAroundHead(x > 0 ? -Math.PI / 6 : Math.PI / 6); c.userData.turned = true; }
+      else if (Math.abs(x) < 0.3) c.userData.turned = false;
+    }
+    const a = gp.buttons[4] && gp.buttons[4].pressed;
+    if (a && !c.userData.aDown) teleport(where === 'front' ? 'back' : 'front');
+    c.userData.aDown = a;
+  }
+}
+let pendingTeleport = 0;
+renderer.xr.addEventListener('sessionstart', () => { pendingTeleport = 3; drawPanel(); });
+renderer.xr.addEventListener('sessionend', () => {
+  camera.position.set(0, 1.6, 0); camera.quaternion.identity(); teleport(where);
+});
+
+// ---------- Desktop / phone controls ----------
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keyup', e => { keys[e.code] = false; });
+let drag = null;
+const el = renderer.domElement;
+function panelUnderPointer(e) {
+  raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  return raycaster.intersectObjects(panels.filter(p => p.visible), false)[0];
+}
+el.addEventListener('pointerdown', e => {
+  drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY }; el.setPointerCapture(e.pointerId);
+  const hit = panelUnderPointer(e), sl = hit && sliderById(btnAtUV(hit.uv));
+  if (sl) { drag.slider = sl; draggingIds.add(sl.id); setSliderFromX(sl, hit.uv.x * CW); }
+});
+el.addEventListener('pointermove', e => {
+  if (!drag || renderer.xr.isPresenting) return;
+  if (drag.slider) { const hit = panelUnderPointer(e); if (hit) setSliderFromX(drag.slider, hit.uv.x * CW); return; }
+  dolly.rotation.y -= (e.clientX - drag.x) * 0.004;
+  pitch = Math.max(-1.3, Math.min(1.3, pitch - (e.clientY - drag.y) * 0.004));
+  camera.rotation.x = pitch;
+  drag.x = e.clientX; drag.y = e.clientY;
+});
+el.addEventListener('pointerup', e => {
+  if (drag && drag.slider) { draggingIds.delete(drag.slider.id); drag = null; drawPanel(); return; }
+  if (drag && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) {
+    raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+    const hit = raycaster.intersectObjects(pickables(), false)[0];
+    if (hit) { const id = idFromHit(hit); if (id) act(id); }
+  }
+  drag = null;
+});
+function desktopMove(dt) {
+  if (renderer.xr.isPresenting) return;
+  const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+  const s = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+  const t = (keys.ArrowLeft || keys.KeyQ ? 1 : 0) - (keys.ArrowRight || keys.KeyE ? 1 : 0);
+  dolly.rotation.y += t * 1.6 * dt;
+  if (f || s) {
+    const yaw = dolly.rotation.y, sp = 2.2 * dt;
+    moveHead((Math.cos(yaw) * s - Math.sin(yaw) * f) * sp, (-Math.sin(yaw) * s - Math.cos(yaw) * f) * sp);
+  }
+}
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ---------- Loop ----------
+const clock = new THREE.Clock(), clearCol = new THREE.Color();
+let lastTurnDraw = 0;
+teleport('front');
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  if (renderer.xr.isPresenting && pendingTeleport > 0 && --pendingTeleport === 0) teleport(where, false, true);
+  if (!paused) spinner.rotation.y += spinDir * SPEEDS[speedIdx] * dt;
+  if (autoOrbit) setOrbit((orbitDeg + 8 * dt) % 360);   // slow walk around the object
+  if ((!paused || autoOrbit) && clock.elapsedTime - lastTurnDraw > 0.25) { lastTurnDraw = clock.elapsedTime; drawPanel(); syncHtmlSliders(); }  // keep moving sliders live
+  xrInput(dt); desktopMove(dt); updateRays(); updateHotspots(clock.elapsedTime);
+
+  revealAmt += ((reveal ? 1 : 0) - revealAmt) * Math.min(1, dt * 4);
+  screenFront.material.opacity = 1 - 0.9 * revealAmt;
+  revealLight.intensity = 3 * revealAmt;
+
+  // Screen pass: project the object flat (no depth) onto the night-sky screen
+  const prevRT = renderer.getRenderTarget(), xrOn = renderer.xr.enabled, bg = scene.background;
+  renderer.getClearColor(clearCol); const prevAlpha = renderer.getClearAlpha();
+  renderer.xr.enabled = false;
+  scene.background = null; screenLook(true);
+  renderer.setClearColor(SPACE, 1);
+  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, shadowCam);
+  renderer.setRenderTarget(prevRT);
+  renderer.setClearColor(clearCol, prevAlpha);
+  screenLook(false); scene.background = bg; renderer.xr.enabled = xrOn;
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

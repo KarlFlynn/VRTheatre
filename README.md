@@ -31,9 +31,14 @@ Desktop: drag to look, WASD / arrow keys to move, click the panels.
 
 ## Versions
 
-Each version is a commit with a matching tag (`v5` … `v14`). To view an old one, open the tag on GitHub, or run `git checkout v8`.
+Every version is kept two ways:
 
-| Tag | Change |
+- **As its own page** in the [`versions/`](versions/) folder, e.g. `versions/v8.html`. With GitHub Pages on, open it at `https://karlflynn.github.io/VRTheatre/versions/v8.html`.
+- **As a commit** in the history (one commit per version, v5 → v14). The live `index.html` is always the latest.
+
+To go back to an old version, copy `versions/vN.html` over `index.html`.
+
+| Version | Change |
 |---|---|
 | v5 | Ten shapes with a shape-picker grid |
 | v6 | Lamp, Turn and Tilt sliders |
