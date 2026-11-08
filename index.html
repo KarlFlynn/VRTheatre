@@ -435,7 +435,7 @@ function drawPanel() {
   }
   pg.textAlign = 'center';
   pg.fillStyle = '#9d917f'; pg.font = '26px Georgia, serif';
-  pg.fillText('Trigger: press buttons, hold to drag sliders · Left stick: move · Right stick: turn · A / X: front ↔ backstage', CW / 2, 1175);
+  pg.fillText('Trigger: buttons & sliders · Grip: grab and move this panel · Left stick: move · Right stick: turn · A / X: front ↔ backstage', CW / 2, 1175);
   panelTex.needsUpdate = true;
 }
 const panelMat = new THREE.MeshBasicMaterial({ map: panelTex, transparent: true });
@@ -540,7 +540,9 @@ function setHeight(v) {
   if (!renderer.xr.isPresenting) { pitch = Math.atan2(SCY - (1.6 + v), ORBIT_R); camera.rotation.x = pitch; }
 }
 // Put the backstage panel to your front-right, then let it ride along with you
+let backPanelMoved = false;   // once you've moved it, it stays where you put it
 function placeBackPanel() {
+  backPanelMoved = false;
   dolly.updateMatrixWorld(true);
   const H = headPos(), yaw = headYaw();
   scene.attach(panelBack);
@@ -562,7 +564,7 @@ function teleport(name, quiet = false, placePanel = false) {
     pitch = name === 'back' ? Math.atan2(SCY - (1.6 + y), ORBIT_R) : 0; camera.rotation.x = pitch;   // look at the object
   }
   if (name === 'front') autoOrbit = false;
-  if (entering || placePanel) placeBackPanel();
+  if ((entering && !backPanelMoved) || placePanel) placeBackPanel();
   panelBack.visible = where === 'back';
   if (!quiet) refreshUI();
 }
@@ -614,6 +616,25 @@ for (let i = 0; i < 2; i++) {
     if (sl) { c.userData.drag = sl; draggingIds.add(sl.id); setSliderFromX(sl, hit.x); } else act(hit.id);
   });
   c.addEventListener('selectend', () => { if (c.userData.drag) { draggingIds.delete(c.userData.drag.id); c.userData.drag = null; drawPanel(); } });
+  // Grip: grab a panel, carry it, let go to leave it there
+  c.addEventListener('squeezestart', () => {
+    rotM.identity().extractRotation(c.matrixWorld);
+    raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(rotM);
+    const hit = raycaster.intersectObjects(panels.filter(p => p.visible && !p.userData.heldBy), false)[0];
+    if (!hit) return;
+    const pnl = hit.object;
+    pnl.userData.home = pnl.parent; pnl.userData.heldBy = c;
+    c.attach(pnl); c.userData.held = pnl;
+  });
+  c.addEventListener('squeezeend', () => {
+    const pnl = c.userData.held; if (!pnl) return;
+    scene.attach(pnl);
+    const h = headPos(); pnl.lookAt(h.x, pnl.position.y, h.z);       // turn it to face you, kept upright
+    pnl.userData.home.attach(pnl);                                     // front panel stays in the room, backstage panel keeps riding with you
+    pnl.userData.heldBy = null; c.userData.held = null;
+    if (pnl === panelBack) backPanelMoved = true;
+  });
   const line = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.7 }));
   line.scale.z = 4; c.add(line); c.userData.line = line;
   c.add(new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })));
